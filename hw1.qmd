@@ -1,0 +1,380 @@
+---
+title: "Problem Set 1"
+author: "Yue He"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    toc: true
+---
+
+GitHub repository: <https://github.com/heyuehul/506HW>
+
+Data files were downloaded and unzipped from the UCI Machine Learning Repository into a `data/` folder before rendering. Variable descriptions come from the UCI dataset pages (soybean: dataset 913, adult: dataset 2).
+
+## Problem 1 - Exploratory Analysis of Soybean Cultivars
+
+### a. Import the data
+
+The variable descriptions come from the dataset documentation:
+
+| Original | Meaning | New name |
+|---|---|---|
+| Season | harvest season | `season` |
+| Cultivar | cultivar name | `cultivar` |
+| Repetition | block / repetition | `rep` |
+| PH | plant height (cm) | `plant_height` |
+| IFP | insertion height of the first pod (cm) | `first_pod` |
+| NLP | number of legumes per plant | `legumes_pp` |
+| NGP | number of grains per plant | `grains_pp` |
+| NGL | number of grains per legume | `grains_pl` |
+| NS | number of stems | `stems` |
+| MHG | seed weight (MHG) | `seed_wt` |
+| GY | grain yield (kg/ha) | `yield` |
+
+```{r}
+soy <- read.csv("data/data.csv")
+names(soy)
+
+names(soy) <- c("season", "cultivar", "rep", "plant_height", "first_pod",
+                "legumes_pp", "grains_pp", "grains_pl", "stems",
+                "seed_wt", "yield")
+head(soy)
+```
+
+### b. Check the structure
+
+```{r}
+nrow(soy)
+length(unique(soy$cultivar))
+unique(soy$season)
+table(soy$season)
+```
+
+There are 320 observations and 40 distinct cultivars, and the only values of `season` are 1 and 2, so all data come from two seasons. Each season has 160 observations (40 cultivars x 4 repetitions).
+
+### c. Questions
+
+**1. Correlation between plant height and grain yield**
+
+```{r}
+cor(soy$plant_height, soy$yield)
+```
+
+The overall correlation between PH and GY is `r round(cor(soy$plant_height, soy$yield), 3)`, a weak positive relationship.
+
+**2. Correlation by season**
+
+```{r}
+cor_s1 <- cor(soy$plant_height[soy$season == 1], soy$yield[soy$season == 1])
+cor_s2 <- cor(soy$plant_height[soy$season == 2], soy$yield[soy$season == 2])
+c(season1 = cor_s1, season2 = cor_s2)
+```
+
+```{r}
+#| echo: false
+hi <- ifelse(cor_s1 > cor_s2, 1, 2)
+```
+
+Season `r hi` has the higher correlation (season 1: `r round(cor_s1, 3)`, season 2: `r round(cor_s2, 3)`).
+
+**3. Grain yield of the tallest plant**
+
+```{r}
+max(soy$plant_height)
+# check if there is a tie for the max height
+sum(soy$plant_height == max(soy$plant_height))
+soy[which.max(soy$plant_height), c("season", "cultivar", "rep", "plant_height", "yield")]
+```
+
+The tallest observation (PH = `r max(soy$plant_height)` cm, cultivar `r soy$cultivar[which.max(soy$plant_height)]`, season 2) has a grain yield of `r round(soy$yield[which.max(soy$plant_height)], 2)` kg/ha.
+
+**4. Percentage with MHG above the average**
+
+```{r}
+mean(soy$seed_wt)
+pct_above <- mean(soy$seed_wt > mean(soy$seed_wt)) * 100
+pct_above
+```
+
+About `r round(pct_above, 1)`% of observations have a seed weight above the overall average.
+
+**5. Cultivar with the highest average yield**
+
+```{r}
+avg_yield <- aggregate(yield ~ cultivar, data = soy, FUN = mean)
+avg_yield <- avg_yield[order(avg_yield$yield, decreasing = TRUE), ]
+head(avg_yield, 5)
+```
+
+`r avg_yield$cultivar[1]` has the highest average grain yield (`r round(avg_yield$yield[1], 2)` kg/ha).
+
+### d. Table of averages
+
+`rep` is just a block number so I left it out; the other 8 variables are quantitative.
+
+```{r}
+quant_vars <- c("plant_height", "first_pod", "legumes_pp", "grains_pp",
+                "grains_pl", "stems", "seed_wt", "yield")
+
+overall <- colMeans(soy[, quant_vars])
+by_season <- aggregate(soy[, quant_vars], by = list(season = soy$season), FUN = mean)
+
+avg_table <- rbind(overall, by_season[, quant_vars])
+avg_table <- data.frame(group = c("Overall", "Season 1", "Season 2"), avg_table)
+knitr::kable(avg_table, digits = 2, row.names = FALSE)
+```
+
+### e. t-tests for grain yield between seasons
+
+Let $\mu_1$ and $\mu_2$ be the mean grain yield in season 1 and season 2.
+
+- $H_0: \mu_1 = \mu_2$ (mean grain yield is the same in both seasons)
+- $H_1: \mu_1 \neq \mu_2$ (mean grain yield is different)
+
+First, the Welch two-sample t-test (does not assume equal variances):
+
+```{r}
+y1 <- soy$yield[soy$season == 1]
+y2 <- soy$yield[soy$season == 2]
+t.test(y1, y2)
+```
+
+Second, the two-sample t-test assuming equal variances:
+
+```{r}
+t.test(y1, y2, var.equal = TRUE)
+```
+
+Third, since the same 40 cultivars and 4 repetitions are planted in both seasons, the observations can be paired by cultivar and repetition. A paired t-test:
+
+```{r}
+s1 <- soy[soy$season == 1, ]
+s2 <- soy[soy$season == 2, ]
+paired <- merge(s1, s2, by = c("cultivar", "rep"), suffixes = c("_s1", "_s2"))
+nrow(paired)
+t.test(paired$yield_s1, paired$yield_s2, paired = TRUE)
+```
+
+```{r}
+#| echo: false
+tt <- t.test(y1, y2)
+```
+
+Interpretation: the mean yield is `r round(mean(y1), 1)` kg/ha in season 1 and `r round(mean(y2), 1)` kg/ha in season 2, a difference of only about `r round(mean(y1) - mean(y2), 1)` kg/ha. The Welch test gives t = `r round(tt$statistic, 3)` and p = `r round(tt$p.value, 3)`, and the equal-variance and paired tests give almost the same p-values (around 0.72). All of them are much larger than 0.05, so we fail to reject $H_0$. There is no significant evidence that the average grain yield differs between the two seasons, and the 95% confidence intervals for the difference all contain 0.
+
+**Extra credit: Welch t-test by hand**
+
+```{r}
+#' Welch two-sample t-test (two-sided), computed manually
+#'
+#' @param x numeric vector, sample 1
+#' @param y numeric vector, sample 2
+#' @return a list with the t statistic, Welch degrees of freedom and two-sided p-value
+welchTest <- function(x, y) {
+  n1 <- length(x)
+  n2 <- length(y)
+  v1 <- var(x) / n1
+  v2 <- var(y) / n2
+  t_stat <- (mean(x) - mean(y)) / sqrt(v1 + v2)
+  # Welch-Satterthwaite degrees of freedom
+  df <- (v1 + v2)^2 / (v1^2 / (n1 - 1) + v2^2 / (n2 - 1))
+  p <- 2 * pt(-abs(t_stat), df)
+  return(list(t = t_stat, df = df, p.value = p))
+}
+
+welchTest(y1, y2)
+```
+
+This matches the `t.test()` output above.
+
+## Problem 2 - Adult Income Dataset
+
+### a. Import the data
+
+`adult.data` has no header row, missing values are coded as `?`, and there is a space after each comma. The column names come from `adult.names`.
+
+```{r}
+adult_names <- c("age", "workclass", "fnlwgt", "education", "education-num",
+                 "marital-status", "occupation", "relationship", "race", "sex",
+                 "capital-gain", "capital-loss", "hours-per-week",
+                 "native-country", "income")
+
+adult <- read.csv("data/adult.data", header = FALSE, col.names = adult_names,
+                  strip.white = TRUE, na.strings = "?")
+dim(adult)
+str(adult)
+```
+
+### b. Clean the variable names
+
+```{r}
+names(adult) <- c("age", "workclass", "fnlwgt", "education", "edu_num",
+                  "marital", "occupation", "relationship", "race", "sex",
+                  "cap_gain", "cap_loss", "hours", "country", "income")
+names(adult)
+```
+
+### c. Missing values
+
+```{r}
+colSums(is.na(adult))
+```
+
+Only three variables have missing values: `workclass` (1836), `occupation` (1843) and `country` (583). Everything else is complete.
+
+### d. Keep people working at least 10 hours per week
+
+```{r}
+n_before <- nrow(adult)
+adult <- adult[adult$hours >= 10, ]
+n_after <- nrow(adult)
+c(before = n_before, after = n_after, dropped = n_before - n_after)
+```
+
+### e. Remove missing occupation, workclass, or country
+
+```{r}
+adult <- adult[!is.na(adult$occupation) & !is.na(adult$workclass) &
+                 !is.na(adult$country), ]
+nrow(adult)
+colSums(is.na(adult))
+```
+
+These three variables describe the person's job and background, which are some of the main things we would use to explain income. If they are missing we cannot use those rows in an analysis that includes these variables, and there is no good way to fill them in (they are categorical, and filling in e.g. the most common occupation would be a guess). Since the missing rows are a small share of the data, dropping them is the simplest option. (Most rows missing `occupation` are also missing `workclass`, so they overlap a lot.)
+
+### f. Age and education restrictions
+
+```{r}
+range(adult$age)
+sum(adult$age < 18)
+sum(adult$age > 90)
+sum(adult$education == "Preschool")
+
+adult <- adult[adult$age >= 18 & adult$age <= 90 & adult$education != "Preschool", ]
+```
+
+Note that the maximum age in the data is 90, so the "greater than 90" condition does not remove anyone.
+
+### g. Final sample size
+
+```{r}
+nrow(adult)
+```
+
+The final sample has `r format(nrow(adult), big.mark = ",")` observations.
+
+## Problem 3 - Happy Numbers
+
+### a. `nextHappy()`
+
+```{r}
+#' Next value in the happy-number sequence
+#'
+#' Takes a positive integer and returns the sum of the squares of its digits.
+#'
+#' @param n a single positive integer
+#' @return a positive integer, the sum of squared digits of n
+nextHappy <- function(n) {
+  if (!is.numeric(n) || length(n) != 1 || is.na(n) || n <= 0 || n %% 1 != 0) {
+    stop("n must be a single positive integer")
+  }
+  total <- 0
+  while (n > 0) {
+    digit <- n %% 10
+    total <- total + digit^2
+    n <- n %/% 10
+  }
+  return(total)
+}
+
+nextHappy(19)
+nextHappy(82)
+```
+
+Invalid inputs give an error:
+
+```{r}
+#| error: true
+nextHappy(-5)
+nextHappy(3.5)
+nextHappy("abc")
+```
+
+### b. `happySequence()`
+
+The loop stops when it reaches 1, or when a number shows up again (that means we are in a cycle that will never reach 1).
+
+```{r}
+#' Happy-number sequence starting from a given number
+#'
+#' Repeatedly applies nextHappy() until the value is 1 or a value repeats.
+#'
+#' @param n a single positive integer
+#' @return a list with
+#'   sequence: numeric vector of values, starting at n (ends at 1 if n is happy;
+#'             otherwise stops before the first repeated value)
+#'   isHappy: TRUE if the sequence reaches 1, FALSE otherwise
+happySequence <- function(n) {
+  if (!is.numeric(n) || length(n) != 1 || is.na(n) || n <= 0 || n %% 1 != 0) {
+    stop("n must be a single positive integer")
+  }
+  seq_vals <- n
+  current <- n
+  while (current != 1) {
+    current <- nextHappy(current)
+    if (current %in% seq_vals) {
+      return(list(sequence = seq_vals, isHappy = FALSE))
+    }
+    seq_vals <- c(seq_vals, current)
+  }
+  return(list(sequence = seq_vals, isHappy = TRUE))
+}
+
+happySequence(19)
+happySequence(4)
+```
+
+```{r}
+#| error: true
+happySequence(0)
+```
+
+### c. Integers 1 through 1000
+
+```{r}
+results <- lapply(1:1000, happySequence)
+is_happy <- sapply(results, function(r) r$isHappy)
+seq_len_vec <- sapply(results, function(r) length(r$sequence))
+
+# check against the list of first happy numbers given in the problem
+which(is_happy)[1:20]
+
+n_happy <- sum(is_happy)
+n_happy
+n_happy / 1000 * 100
+```
+
+There are `r n_happy` happy numbers between 1 and 1000, which is `r n_happy / 10`%.
+
+For the longest sequence, I count the length of the `sequence` vector (including the starting number and the final 1).
+
+```{r}
+# longest sequence among happy numbers
+happy_len <- seq_len_vec[is_happy]
+max(happy_len)
+which(is_happy & seq_len_vec == max(happy_len))
+happySequence(which(is_happy & seq_len_vec == max(happy_len))[1])
+
+# for comparison: longest over all numbers, happy or not (stopping at the cycle)
+max(seq_len_vec)
+which(seq_len_vec == max(seq_len_vec))
+```
+
+```{r}
+#| echo: false
+long_happy <- which(is_happy & seq_len_vec == max(happy_len))
+```
+
+Among happy numbers, the longest sequence has `r max(happy_len)` values and is produced by `r paste(long_happy, collapse = ", ")`, so the smallest starting value is `r long_happy[1]`. If unhappy numbers are also counted (sequence up to the point where it starts cycling), the longest sequence has `r max(seq_len_vec)` values, starting from `r paste(which(seq_len_vec == max(seq_len_vec)), collapse = ", ")`.

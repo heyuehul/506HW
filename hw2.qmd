@@ -1,0 +1,410 @@
+---
+title: "Problem Set 2"
+author: "Yue He"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+    toc: true
+---
+
+GitHub repository: <https://github.com/heyuehul/506HW>
+
+## Problem 1 - Random Walk with Momentum
+
+### a. Simulation function
+
+The four directions are stored as rows of a matrix, so a direction is just a row number (1 = right, 2 = left, 3 = up, 4 = down). Both versions below use the same input check, so I put it in its own function.
+
+```{r}
+# each row is the (x, y) change for one direction
+dirs <- matrix(c( 1,  0,
+                 -1,  0,
+                  0,  1,
+                  0, -1),
+               ncol = 2, byrow = TRUE,
+               dimnames = list(c("right", "left", "up", "down"), c("x", "y")))
+
+#' Check the inputs of the momentum walk functions
+#'
+#' @param n number of steps, must be a single integer >= 1
+#' @param p momentum probability, must be a single number in [0, 1]
+#' @return nothing; stops with an error if an input is invalid
+check_walk_inputs <- function(n, p) {
+  if (!is.numeric(n) || length(n) != 1 || is.na(n) || n < 1 || n %% 1 != 0) {
+    stop("n must be a single integer >= 1")
+  }
+  if (!is.numeric(p) || length(p) != 1 || is.na(p) || p < 0 || p > 1) {
+    stop("p must be a single number between 0 and 1")
+  }
+  invisible(NULL)
+}
+
+#' Simulate a 2D random walk with momentum (loop version)
+#'
+#' The first step is in a random direction. After that, with probability p
+#' the particle repeats its previous direction, otherwise it picks one of the
+#' four directions at random (which can also be the previous one).
+#'
+#' @param n number of steps (integer >= 1)
+#' @param p probability of keeping the previous direction (0 <= p <= 1)
+#' @return numeric vector of length 2: the final x and y coordinates
+momentum_walk <- function(n, p) {
+  check_walk_inputs(n, p)
+  d <- sample(1:4, 1)
+  pos <- dirs[d, ]
+  if (n >= 2) {
+    for (i in 2:n) {
+      if (runif(1) >= p) {
+        d <- sample(1:4, 1)
+      }
+      pos <- pos + dirs[d, ]
+    }
+  }
+  return(unname(pos))
+}
+
+momentum_walk(10, 0.6)
+momentum_walk(10, 0.6)
+```
+
+Invalid inputs give an error:
+
+```{r}
+#| error: true
+momentum_walk(0, 0.6)
+momentum_walk(10.5, 0.6)
+momentum_walk(10, 1.2)
+```
+
+### b. Two implementations
+
+**Version 1 (loop).** This is the function from part a. It keeps track of the current direction `d` and the position. At each step after the first, it draws a uniform number; if it is at least `p` (which happens with probability 1 - p) it draws a new direction, otherwise it keeps `d`. Then it adds that direction's move to the position.
+
+```{r}
+momentum_walk1 <- momentum_walk
+```
+
+**Version 2 (`vapply`).** The direction at a step only depends on the last time a new direction was drawn. So I can draw all the random numbers at once:
+
+- `redraw[i]` is TRUE if step i picks a new random direction (always TRUE for step 1),
+- `new_dir[i]` is the direction that would be picked at step i.
+
+For each step, `cummax()` gives the index of the most recent redraw, and the direction at that step is `new_dir` at that index. Then `vapply()` turns each step's direction into its (x, y) move, and adding up the moves gives the final position.
+
+```{r}
+#' Simulate a 2D random walk with momentum (apply version)
+#'
+#' Same model as momentum_walk1(), but the random draws are made up front and
+#' vapply() converts the sequence of directions into moves.
+#'
+#' @param n number of steps (integer >= 1)
+#' @param p probability of keeping the previous direction (0 <= p <= 1)
+#' @return numeric vector of length 2: the final x and y coordinates
+momentum_walk2 <- function(n, p) {
+  check_walk_inputs(n, p)
+  redraw <- runif(n) >= p
+  redraw[1] <- TRUE
+  new_dir <- sample(1:4, n, replace = TRUE)
+  # index of the most recent redraw at or before each step
+  last_redraw <- cummax(ifelse(redraw, seq_len(n), 0))
+  step_dir <- new_dir[last_redraw]
+  moves <- vapply(step_dir, function(d) dirs[d, ], numeric(2))
+  return(unname(rowSums(moves)))
+}
+```
+
+```{r}
+momentum_walk1(10, 0.6)
+momentum_walk2(10, 0.6)
+momentum_walk1(1000, 0.6)
+momentum_walk2(1000, 0.6)
+```
+
+As a quick sanity check that the two versions follow the same model, the average distance from the origin over 2,000 walks of 100 steps should be about the same for both:
+
+```{r}
+dist <- function(pos) sqrt(sum(pos^2))
+set.seed(1)
+c(loop = mean(replicate(2000, dist(momentum_walk1(100, 0.6)))),
+  vapply = mean(replicate(2000, dist(momentum_walk2(100, 0.6)))))
+```
+
+### c. Reproducibility
+
+R's random numbers come from a pseudo-random number generator, which produces a fixed sequence once its starting state (the seed) is fixed. `set.seed()` sets that state, so running the same code right after the same `set.seed()` call gives the same draws and therefore the same walk. I use version 1.
+
+```{r}
+set.seed(506)
+run1 <- momentum_walk1(10, 0.6)
+set.seed(506)
+run2 <- momentum_walk1(10, 0.6)
+rbind(run1, run2)
+identical(run1, run2)
+
+set.seed(506)
+run3 <- momentum_walk1(1000, 0.6)
+set.seed(506)
+run4 <- momentum_walk1(1000, 0.6)
+rbind(run3, run4)
+identical(run3, run4)
+```
+
+The results only match if the seed is reset before each run. Without resetting it, the second call continues from where the first call left off in the random sequence and gives a different walk.
+
+### d. Does momentum matter?
+
+`dist()` (defined above) computes $D = \sqrt{x^2 + y^2}$.
+
+```{r}
+set.seed(2026)
+p_vals <- c(0, 0.5, 0.9)
+one_walk <- t(sapply(p_vals, function(p) momentum_walk1(1000, p)))
+one_walk <- data.frame(p = p_vals, x = one_walk[, 1], y = one_walk[, 2],
+                       distance = apply(one_walk, 1, dist))
+one_walk
+```
+
+In this simulation the final distance is `r round(one_walk$distance[1], 1)` for p = 0, `r round(one_walk$distance[2], 1)` for p = 0.5 and `r round(one_walk$distance[3], 1)` for p = 0.9, so higher momentum seems to increase the distance. This makes sense: with high momentum the particle moves in long straight runs in the same direction, so the steps cancel each other out less often than in a regular random walk. But this is only one walk per p, and a single random walk can end up close to or far from the origin by chance, which is why part e repeats it many times.
+
+### e. Monte Carlo simulation
+
+I use `momentum_walk2()` here because it is faster (see part f), and `replicate()` to repeat the walk 1,000 times for each p.
+
+```{r}
+set.seed(2026)
+p_grid <- c(0, 0.25, 0.5, 0.75, 0.9)
+mean_distance <- sapply(p_grid, function(p) {
+  mean(replicate(1000, dist(momentum_walk2(1000, p))))
+})
+mc_results <- data.frame(p = p_grid, mean_distance = mean_distance)
+mc_results
+```
+
+The mean final distance increases as p increases, from about `r round(mc_results$mean_distance[1], 1)` at p = 0 to about `r round(mc_results$mean_distance[5], 1)` at p = 0.9. It also grows faster for larger p: going from 0.75 to 0.9 adds more distance than going from 0 to 0.25. With momentum the walk behaves like a random walk with longer steps (a run of steps in the same direction acts like one long step), so it spreads out further from the origin.
+
+### f. Computational performance
+
+```{r}
+library(microbenchmark)
+set.seed(506)
+bench_small <- microbenchmark(
+  loop = momentum_walk1(1000, 0.6),
+  vapply = momentum_walk2(1000, 0.6),
+  times = 100
+)
+bench_small
+
+bench_large <- microbenchmark(
+  loop = momentum_walk1(100000, 0.6),
+  vapply = momentum_walk2(100000, 0.6),
+  times = 10
+)
+bench_large
+```
+
+```{r}
+#| echo: false
+med_small <- summary(bench_small)$median
+med_large <- summary(bench_large)$median
+ratio_small <- med_small[1] / med_small[2]
+ratio_large <- med_large[1] / med_large[2]
+```
+
+(`microbenchmark` reports the time unit at the top of each table, and the unit can differ between the two tables.)
+
+The `vapply` version is faster for both sizes. Comparing medians, the loop takes about `r round(ratio_small, 1)` times as long as the `vapply` version when n = 1,000, and about `r round(ratio_large, 1)` times as long when n = 100,000. The absolute gap grows with n, since both versions do work for every step, so a constant per-step difference adds up over more steps.
+
+The main reason is how the random numbers are generated. The loop calls `runif(1)` and possibly `sample(1:4, 1)` once per step, so it pays R's function-call overhead up to twice for each of the n steps. Version 2 calls `runif(n)` and `sample(..., n)` once each, and these run in compiled C code. `cummax()` and `rowSums()` are vectorized too. The `vapply()` part still calls a small R function once per step, so version 2 is not fully vectorized, but it does much less work per step than the loop.
+
+## Problem 2 - Monte Carlo Simulation of Campus Bus Arrivals
+
+Each row of the matrix below is one simulated day and each column is one hour (6 AM to 10 PM, 17 hours). All random numbers are drawn at once, so no loops are needed. The variances 16 and 25 correspond to standard deviations 4 and 5.
+
+```{r}
+set.seed(506)
+n_days <- 10000
+
+day_matrix <- cbind(
+  matrix(rpois(3 * n_days, lambda = 4), ncol = 3),   # 6 AM - 8 AM
+  rnorm(n_days, mean = 45, sd = 4),                  # 9 AM
+  matrix(rpois(6 * n_days, lambda = 15), ncol = 6),  # 10 AM - 3 PM
+  rnorm(n_days, mean = 55, sd = 5),                  # 4 PM
+  matrix(rpois(6 * n_days, lambda = 9), ncol = 6)    # 5 PM - 10 PM
+)
+dim(day_matrix)
+
+daily_total <- rowSums(day_matrix)
+mean(daily_total)
+```
+
+```{r}
+#| echo: false
+expected <- 3 * 4 + 45 + 6 * 15 + 55 + 6 * 9
+```
+
+The estimated expected number of passengers per day is `r round(mean(daily_total), 1)`. This is very close to the exact value from adding up the hourly means, 3(4) + 45 + 6(15) + 55 + 6(9) = `r expected`.
+
+The Normal hours can give non-integer passenger counts. The chance of a negative count is negligible here (45 and 55 are more than 10 standard deviations above 0), and since rounding would not change the expected total by much, I left the values unrounded.
+
+## Problem 3 - Linear Regression
+
+The URL below is the one given in the assignment. Because the GitHub raw link
+is not always reachable from my network, I also saved a copy of the same file
+to `data/youtube.csv`; the code reads the local copy if it exists and the URL
+otherwise.
+
+```{r}
+youtube_url <- "https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-03-02/youtube.csv"
+local_copy <- "data/youtube.csv"
+youtube <- read.csv(if (file.exists(local_copy)) local_copy else youtube_url)
+dim(youtube)
+```
+
+### a. De-identification
+
+I removed the variables that identify a specific ad or video: the brand, the two URLs, the YouTube video id, `kind` and `etag` (API metadata), the publication date, title, description, thumbnail and channel title. I kept `year`, the 7 binary characteristics, the engagement counts and `category_id` (a broad YouTube category shared by many videos).
+
+```{r}
+id_vars <- c("brand", "superbowl_ads_dot_com_url", "youtube_url", "id",
+             "kind", "etag", "published_at", "title", "description",
+             "thumbnail", "channel_title")
+yt <- youtube[, !(names(youtube) %in% id_vars)]
+names(yt)
+dim(yt)
+```
+
+The de-identified data has `r nrow(yt)` rows and `r ncol(yt)` columns.
+
+### b. Exploring the outcomes
+
+```{r}
+outcomes <- c("view_count", "like_count", "dislike_count",
+              "favorite_count", "comment_count")
+sapply(yt[outcomes], function(x) {
+  c(n_missing = sum(is.na(x)), n_zero = sum(x == 0, na.rm = TRUE),
+    min = min(x, na.rm = TRUE), median = median(x, na.rm = TRUE),
+    mean = mean(x, na.rm = TRUE), max = max(x, na.rm = TRUE))
+})
+```
+
+```{r}
+#| fig-height: 6
+par(mfrow = c(2, 3))
+for (v in outcomes) {
+  hist(yt[[v]], breaks = 30, main = v, xlab = "count")
+}
+par(mfrow = c(1, 1))
+```
+
+- **View counts: transform.** The distribution is extremely right skewed: the median is about 41,000 but the maximum is over 176 million, so a few videos would dominate a regression. All values are positive, so I use `log(view_count)`.
+- **Like counts: transform.** Also heavily right skewed (median 130, max about 275,000). There are some zeros, so I use `log(like_count + 1)`.
+- **Dislike counts: transform.** Same pattern (median 7, max about 93,000) with 47 zeros, so I use `log(dislike_count + 1)`.
+- **Favorite counts: not appropriate.** Every non-missing value is 0, so there is no variation to model.
+- **Comment counts: transform.** Right skewed (median 10, max about 9,000) with zeros, so I use `log(comment_count + 1)`.
+
+```{r}
+yt$log_view <- log(yt$view_count)
+yt$log_like <- log(yt$like_count + 1)
+yt$log_dislike <- log(yt$dislike_count + 1)
+yt$log_comment <- log(yt$comment_count + 1)
+```
+
+```{r}
+#| fig-height: 5
+par(mfrow = c(2, 2))
+for (v in c("log_view", "log_like", "log_dislike", "log_comment")) {
+  hist(yt[[v]], breaks = 30, main = v, xlab = "log count")
+}
+par(mfrow = c(1, 1))
+```
+
+After the log transformation, the distributions are much closer to symmetric, which is more reasonable for a linear regression outcome.
+
+### c. Regression models
+
+For each of the 4 outcomes and each of the 7 characteristics, I fit `outcome ~ characteristic + year` (28 models). Rows with a missing outcome are dropped by `lm()`.
+
+```{r}
+#' Fit outcome ~ characteristic + year and return the characteristic's estimate
+#'
+#' @param outcome name of the (transformed) outcome column in yt
+#' @param predictor name of a logical characteristic column in yt
+#' @return named numeric vector: coefficient estimate, p-value, and n used
+fit_one <- function(outcome, predictor) {
+  model <- lm(as.formula(paste(outcome, "~", predictor, "+ year")), data = yt)
+  coefs <- summary(model)$coefficients
+  row <- paste0(predictor, "TRUE")
+  return(c(estimate = coefs[row, "Estimate"],
+           p_value = coefs[row, "Pr(>|t|)"],
+           n = nobs(model)))
+}
+
+characteristics <- c("funny", "show_product_quickly", "patriotic",
+                     "celebrity", "danger", "animals", "use_sex")
+log_outcomes <- c("log_view", "log_like", "log_dislike", "log_comment")
+
+grid <- expand.grid(outcome = log_outcomes, predictor = characteristics,
+                    stringsAsFactors = FALSE)
+fits <- t(mapply(fit_one, grid$outcome, grid$predictor))
+results <- data.frame(grid, fits, row.names = NULL)
+results$significant <- results$p_value < 0.05
+results$estimate <- round(results$estimate, 3)
+results$p_value <- round(results$p_value, 4)
+knitr::kable(results)
+```
+
+```{r}
+sig <- results[results$significant, ]
+if (nrow(sig) > 0) {
+  sig$direction <- ifelse(sig$estimate > 0, "positive", "negative")
+  knitr::kable(sig[, c("outcome", "predictor", "estimate", "p_value", "direction")],
+               row.names = FALSE)
+} else {
+  cat("No association is significant at alpha = 0.05.\n")
+  cat("Smallest p-value:", min(results$p_value), "\n")
+}
+
+view_res <- results[results$outcome == "log_view", ]
+view_res[which.max(view_res$estimate), ]
+```
+
+```{r}
+#| echo: false
+best_view <- view_res[which.max(view_res$estimate), ]
+```
+
+At the 0.05 level, `r if (nrow(sig) == 0) "none of the 28 associations is statistically significant" else paste0(nrow(sig), " of the 28 associations are statistically significant (listed above, with the direction of each)")`. `r if (nrow(sig) == 0) paste0("The smallest p-value among them is ", min(results$p_value), ", so after controlling for year there is no evidence that any of these characteristics is associated with views, likes, dislikes or comments, and there are no directions to report.") else ""`
+
+The characteristic with the largest positive estimated association with (log) view count is `r best_view$predictor`, with an estimate of `r best_view$estimate` (p = `r best_view$p_value`). On the log scale this means commercials with this characteristic have about `r round(100 * (exp(best_view$estimate) - 1))`% more views on average, holding year fixed`r if (best_view$p_value >= 0.05) ", although this estimate is not statistically significant" else ""`.
+
+### d. Coefficients by matrix algebra
+
+```{r}
+smallest_p <- view_res$predictor[which.min(view_res$p_value)]
+smallest_p
+```
+
+`r smallest_p` has the smallest p-value for log view count, so X is `r smallest_p`. I drop rows with a missing view count, build the design matrix with a column of 1s for the intercept, and compute $\hat\beta = (X^TX)^{-1}X^Ty$.
+
+```{r}
+d <- yt[!is.na(yt$log_view), ]
+X <- cbind(intercept = 1,
+           x = as.numeric(d[[smallest_p]]),
+           year = d$year)
+y <- d$log_view
+dim(X)
+
+beta_hat <- solve(t(X) %*% X) %*% t(X) %*% y
+beta_hat
+
+fit_lm <- lm(as.formula(paste("log_view ~", smallest_p, "+ year")), data = d)
+coef(fit_lm)
+
+# compare the two sets of estimates
+cbind(matrix = as.vector(beta_hat), lm = coef(fit_lm))
+all.equal(as.vector(beta_hat), unname(coef(fit_lm)))
+```
+
+The coefficients from the matrix formula and from `lm()` agree up to numerical precision (`all.equal()` returns TRUE).

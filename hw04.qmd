@@ -1,0 +1,488 @@
+---
+title: "STATS 506 Homework 4"
+author: "Yue He"
+date: today
+format:
+  html:
+    embed-resources: true
+    code-fold: show
+    toc: true
+editor: source
+---
+
+GitHub repository: <https://github.com/heyuehul/506HW>
+
+## Attribution of sources
+
+AI use: Claude helped me come up with ideas for the third question and assisted me in analyzing the code results. He also helped me write the code for the second question and debug the whole text.
+
+Data sources: `nzge` from the nzelect package (Ellis, via its GitHub
+repository); 2019 ATP matches from the azhou5849/tennis-atp-sackmann-data
+repository; COVID-19 rolling averages from The New York Times covid-19-data
+repository.
+
+```{r}
+#| label: setup
+#| message: false
+library(tidyverse)
+library(knitr)
+library(ggrepel)
+```
+
+## Problem 1 - Tidyverse: New Zealand
+
+```{r}
+#| label: nz-data
+# nzge.rds downloaded from the course site
+nzge <- readRDS("nzge.rds") |>
+  as_tibble()
+glimpse(nzge)
+```
+
+From `?nzge`, each row is the number of votes for one party (or the informal
+votes) at one voting place, for one vote type (`Candidate` = electorate vote,
+`Party` = list vote), in one election year. Because the two vote types are cast
+on the same ballot, they are always summarised separately below.
+
+### a. Vote count per year and vote type
+
+```{r}
+#| label: nz-a
+nzge |>
+  group_by(election_year, voting_type) |>
+  summarise(total_votes = sum(votes), .groups = "drop") |>
+  arrange(desc(total_votes)) |>
+  mutate(election_year = as.character(election_year)) |>
+  kable(col.names = c("Year", "Vote type", "Total votes"),
+        format.args = list(big.mark = ","))
+```
+
+The totals include informal (invalid) votes, since the question asks for the
+count regardless of party. In every year the Party vote total is slightly
+larger than the Candidate vote total, and 2017 has the most votes of either
+type.
+
+### b. 2014 Candidate election: proportion of votes by party
+
+```{r}
+#| label: nz-b
+nzge |>
+  filter(election_year == 2014,
+         voting_type == "Candidate",
+         party != "Informal Candidate Votes") |>
+  group_by(party) |>
+  summarise(votes = sum(votes), .groups = "drop") |>
+  mutate(percent = 100 * votes / sum(votes)) |>
+  arrange(desc(percent)) |>
+  kable(col.names = c("Party", "Votes", "Percent of valid votes"),
+        digits = 2, format.args = list(big.mark = ","))
+```
+
+Informal votes are not a vote for any party, so they are dropped and the
+percentages are shares of valid Candidate votes. The National Party received
+the largest share (about 47%), followed by Labour (about 35%).
+
+### c. Winning party by year and vote type
+
+```{r}
+#| label: nz-c
+nzge |>
+  filter(!str_detect(party, "^Informal")) |>
+  group_by(election_year, voting_type, party) |>
+  summarise(votes = sum(votes), .groups = "drop_last") |>
+  slice_max(votes, n = 1) |>
+  ungroup() |>
+  select(election_year, voting_type, party) |>
+  pivot_wider(names_from = voting_type, values_from = party) |>
+  kable(col.names = c("Year", "Candidate vote winner", "Party vote winner"))
+```
+
+Labour won both votes in 2002. In 2005 the votes split: National narrowly won
+the Candidate vote (by about 800 votes nationally) while Labour won the Party
+vote, which is what determines seat allocation under MMP. From 2008 to 2017 the
+National Party won both votes.
+
+## Problem 2 - Tidyverse: Tennis
+
+```{r}
+#| label: tennis-data
+#| message: false
+atp_url <- paste0("https://raw.githubusercontent.com/azhou5849/",
+                  "tennis-atp-sackmann-data/master/atp_matches_2019.csv")
+atp <- read_csv(atp_url, show_col_types = FALSE)
+dim(atp)
+```
+
+Each row is one match. Exploring the identifying columns:
+
+```{r}
+#| label: tennis-explore
+atp |>
+  distinct(tourney_id, tourney_name, tourney_level) |>
+  count(tourney_level, name = "n_tourney_ids")
+
+atp |>
+  count(round)
+
+atp |>
+  filter(tourney_level == "D") |>
+  distinct(tourney_name) |>
+  slice_head(n = 5)
+```
+
+`tourney_level` codes are A (ATP 250/500), M (Masters 1000), G (Grand Slams),
+F (season finals) and D (Davis Cup). Every Davis Cup *tie* (one country vs.
+another) gets its own `tourney_id`, so the 60 Davis Cup IDs are rubbers of a
+single team competition, not separate tournaments. The Laver Cup is also a
+team exhibition and has no final.
+
+### a. Number of tournaments in 2019
+
+```{r}
+#| label: tennis-a
+atp |>
+  summarise(
+    all_tourney_ids         = n_distinct(tourney_id),
+    davis_cup_ties          = n_distinct(tourney_id[tourney_level == "D"]),
+    individual_tournaments  = n_distinct(tourney_id[tourney_level != "D" &
+                                                    tourney_name != "Laver Cup"])
+  ) |>
+  kable(col.names = c("All tourney IDs", "Davis Cup ties",
+                      "Individual tournaments"))
+```
+
+There are 128 distinct `tourney_id`s, but 60 are Davis Cup ties and one is the
+Laver Cup. Counting individual tournaments that crown a champion, **67
+tournaments** took place in 2019 (68 if the Laver Cup is counted as one event,
+69 if the Davis Cup is also counted as a single tournament).
+
+### b. Players who won more than one tournament
+
+A tournament's winner is the winner of its final (`round == "F"`).
+
+```{r}
+#| label: tennis-b
+titles <- atp |>
+  filter(round == "F") |>
+  count(winner_name, name = "titles", sort = TRUE)
+
+titles |>
+  filter(titles > 1) |>
+  kable(col.names = c("Player", "Titles"))
+
+titles |>
+  summarise(players_with_multiple_titles = sum(titles > 1),
+            max_titles = max(titles))
+```
+
+Yes. 12 players won more than one tournament. The top winners, Dominic Thiem
+and Novak Djokovic, each won 5 tournaments (the table above lists everyone with
+2 or more).
+
+### c. Do winners hit more aces than losers?
+
+Each match gives a natural pair (winner's aces, loser's aces), so a paired
+t-test on the per-match difference is appropriate. The test is computed by hand
+inside a dplyr pipeline.
+
+```{r}
+#| label: tennis-c
+atp |>
+  filter(!is.na(w_ace), !is.na(l_ace)) |>
+  mutate(ace_diff = w_ace - l_ace) |>
+  summarise(
+    n_matches       = n(),
+    mean_w_ace      = mean(w_ace),
+    mean_l_ace      = mean(l_ace),
+    mean_diff       = mean(ace_diff),
+    se_diff         = sd(ace_diff) / sqrt(n_matches),
+    t_stat          = mean_diff / se_diff,
+    p_value_one_sid = pt(t_stat, df = n_matches - 1, lower.tail = FALSE)
+  ) |>
+  kable(digits = 4)
+```
+
+Over the 2,694 matches with ace data, winners averaged 7.5 aces and losers
+5.8, a mean difference of about 1.7 aces per match. The one-sided paired test
+(H0: mean difference = 0, H1: winners hit more aces) gives t = 12.4 on 2,693
+degrees of freedom and a p-value of about 1.5e-34, so there is strong evidence that match winners hit more aces than losers.
+(This is an association; serving well both produces aces and wins matches.)
+
+### d. Highest win rate (at least 5 matches)
+
+```{r}
+#| label: tennis-d
+atp |>
+  select(winner_name, loser_name) |>
+  pivot_longer(everything(), names_to = "result", values_to = "player") |>
+  group_by(player) |>
+  summarise(matches  = n(),
+            wins     = sum(result == "winner_name"),
+            win_rate = wins / matches,
+            .groups  = "drop") |>
+  filter(matches >= 5) |>
+  slice_max(win_rate, n = 5) |>
+  kable(col.names = c("Player", "Matches", "Wins", "Win rate"), digits = 3)
+```
+
+Among players with at least 5 matches, **Rafael Nadal** has the highest win
+rate: 60 wins in 69 matches (87.0%), ahead of Djokovic (84.1%) and Federer
+(83.3%). All matches in the file are counted, including Davis Cup rubbers and
+walkovers.
+
+## Problem 3 - Visualization
+
+```{r}
+#| label: covid-data
+covid_url <- paste0("https://raw.githubusercontent.com/nytimes/covid-19-data/",
+                    "refs/heads/master/rolling-averages/us-states.csv")
+territories <- c("Puerto Rico", "Guam", "Virgin Islands",
+                 "Northern Mariana Islands", "American Samoa")
+covid <- read_csv(covid_url, show_col_types = FALSE) |>
+  filter(!state %in% territories)   # 50 states + DC
+range(covid$date)
+```
+
+`cases_avg` is the 7-day rolling average of new cases and `cases_avg_per_100k`
+is the same quantity per 100,000 residents, so it is already adjusted for
+population.
+
+### a. Major and minor spikes
+
+```{r}
+#| label: covid-a
+#| fig-width: 10
+#| fig-height: 5.5
+national <- covid |>
+  group_by(date) |>
+  summarise(cases_avg = sum(cases_avg, na.rm = TRUE), .groups = "drop")
+
+# label the highest point inside each wave's window
+waves <- tribble(
+  ~wave,                   ~start,       ~end,         ~type,
+  "Spring 2020",           "2020-03-01", "2020-05-31", "Minor",
+  "Summer 2020",           "2020-06-01", "2020-09-15", "Minor",
+  "Winter 2020-21",        "2020-10-01", "2021-03-01", "Major",
+  "Spring 2021",           "2021-03-01", "2021-06-01", "Minor",
+  "Delta (2021)",          "2021-07-01", "2021-11-01", "Major",
+  "Omicron (2022)",        "2021-12-01", "2022-03-01", "Major",
+  "Summer 2022 (BA.5)",    "2022-05-01", "2022-09-30", "Minor",
+  "Winter 2022-23",        "2022-11-01", "2023-02-01", "Minor"
+) |>
+  mutate(across(c(start, end), as.Date))
+
+peaks <- waves |>
+  rowwise() |>
+  mutate(peak = list(national |>
+                       filter(date >= start, date < end) |>
+                       slice_max(cases_avg, n = 1, with_ties = FALSE))) |>
+  ungroup() |>
+  unnest(peak)
+
+ggplot(national, aes(date, cases_avg / 1000)) +
+  geom_area(fill = "grey85") +
+  geom_line(colour = "grey30", linewidth = 0.4) +
+  geom_hline(yintercept = 150, linetype = "dashed", colour = "grey50") +
+  geom_point(data = peaks, aes(colour = type), size = 2.5) +
+  geom_text_repel(data = peaks,
+                  aes(label = paste0(wave, "\n",
+                                     scales::comma(round(cases_avg / 1000)),
+                                     "k/day"),
+                      colour = type),
+                  size = 3.2, nudge_y = 60, segment.colour = "grey60",
+                  lineheight = 0.9, show.legend = FALSE) +
+  annotate("text", x = as.Date("2022-10-01"), y = 175,
+           label = "Major threshold: 150k/day", hjust = 0, size = 3,
+           colour = "grey40") +
+  scale_colour_manual(values = c(Major = "#B2182B", Minor = "#2166AC"),
+                      name = "Spike") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b\n%Y",
+               expand = expansion(mult = 0.01)) +
+  scale_y_continuous(labels = scales::label_comma(suffix = "k"),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "U.S. daily new COVID-19 cases: three major and five minor waves",
+       subtitle = "7-day average of reported new cases, 50 states + DC",
+       x = NULL, y = "New cases per day (thousands)",
+       caption = "Source: The New York Times, COVID-19 data (rolling averages)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "top", legend.justification = "left",
+        plot.title = element_text(face = "bold"))
+```
+
+I count **8 spikes: 3 major and 5 minor**. I define a major spike as a wave
+whose national 7-day average exceeded 150,000 cases/day (dashed line): winter
+2020-21, the Delta wave (late summer 2021), and the Omicron wave (January 2022,
+peaking around 800k/day, more than three times any other wave). The minor
+spikes are spring 2020, summer 2020, spring 2021, summer 2022 (BA.5) and winter
+2022-23. Waves after early 2022 are likely understated because home testing
+meant many cases were never reported.
+
+### b. Highest vs. lowest overall rates
+
+The overall rate per population is the total reported cases per 100,000
+residents. Summing the daily 7-day average per 100k over the whole period gives
+that cumulative rate.
+
+```{r}
+#| label: covid-b-rank
+state_rates <- covid |>
+  group_by(state) |>
+  summarise(total_per_100k = sum(cases_avg_per_100k, na.rm = TRUE),
+            .groups = "drop") |>
+  arrange(desc(total_per_100k))
+
+extremes <- bind_rows(
+  slice_head(state_rates, n = 5) |> mutate(group = "Highest 5 states"),
+  slice_tail(state_rates, n = 5) |> mutate(group = "Lowest 5 states")
+)
+extremes |>
+  kable(col.names = c("State", "Total cases per 100k", "Group"),
+        digits = 0, format.args = list(big.mark = ","))
+```
+
+```{r}
+#| label: covid-b-plot
+#| fig-width: 10
+#| fig-height: 6
+cum <- covid |>
+  arrange(state, date) |>
+  group_by(state) |>
+  mutate(cum_per_100k = cumsum(replace_na(cases_avg_per_100k, 0))) |>
+  ungroup()
+
+cum_ext <- cum |>
+  inner_join(extremes |> select(state, group), by = "state")
+
+end_labels <- cum_ext |>
+  filter(date == max(date))
+
+ggplot(cum, aes(date, cum_per_100k / 1000, group = state)) +
+  geom_line(colour = "grey85", linewidth = 0.3) +
+  geom_line(data = cum_ext, aes(colour = group), linewidth = 0.8) +
+  geom_text_repel(data = end_labels,
+                  aes(label = state, colour = group),
+                  direction = "y", hjust = 0, nudge_x = 25, size = 3.2,
+                  segment.colour = "grey70", show.legend = FALSE) +
+  scale_colour_manual(values = c("Highest 5 states" = "#B2182B",
+                                 "Lowest 5 states" = "#2166AC"),
+                      name = NULL) +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y",
+               expand = expansion(mult = c(0.01, 0.15))) +
+  scale_y_continuous(labels = scales::label_comma(suffix = "k")) +
+  labs(title = "Cumulative COVID-19 cases per 100,000 residents",
+       subtitle = paste("Five states with the highest and lowest totals;",
+                        "grey lines are all other states and DC"),
+       x = NULL, y = "Cumulative cases per 100k (thousands)",
+       caption = "Source: The New York Times, COVID-19 data (rolling averages)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "top", legend.justification = "left",
+        plot.title = element_text(face = "bold"))
+```
+
+```{r}
+#| label: covid-b-daily
+#| fig-width: 10
+#| fig-height: 6
+covid |>
+  inner_join(extremes |> select(state, group), by = "state") |>
+  mutate(state = factor(state, levels = extremes$state)) |>
+  ggplot(aes(date, cases_avg_per_100k, colour = group)) +
+  geom_line(linewidth = 0.4, show.legend = FALSE) +
+  facet_wrap(~ state, nrow = 2) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_colour_manual(values = c("Highest 5 states" = "#B2182B",
+                                 "Lowest 5 states" = "#2166AC")) +
+  labs(title = "Daily new COVID-19 cases per 100,000 residents",
+       subtitle = paste("7-day average. Top row (red): five highest-total states;",
+                        "bottom row (blue): five lowest"),
+       x = NULL, y = "New cases per 100k per day",
+       caption = "Source: The New York Times, COVID-19 data (rolling averages)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold", hjust = 0),
+        plot.title = element_text(face = "bold"))
+```
+
+The highest-rate states are Rhode Island, Alaska, Kentucky, North Dakota and
+Tennessee; the lowest are Maine, Maryland, Oregon, Vermont and DC.
+
+- Spring 2020: the ordering was nearly reversed. DC, Rhode Island and Maryland
+  had the earliest outbreaks, while Alaska, Oregon and Vermont had almost no
+  cases.
+- Fall/winter 2020-21: this is where the groups split. North Dakota, Tennessee,
+  Kentucky and Rhode Island had very large surges (North Dakota reached about
+  12,900 cumulative cases per 100k by March 2021), while Vermont, Maine and
+  Oregon stayed below about 3,700.
+- Delta (summer-fall 2021): the gap widened again. Alaska, Kentucky, Tennessee
+  and North Dakota added roughly 6,000 to 11,000 cases per 100k between July
+  and December 2021, versus roughly 2,000 to 4,000 in the low-rate states.
+- Omicron (winter 2021-22): every state spiked at about the same time, and the
+  increase was similar in both groups (Rhode Island had the tallest peak, about
+  500 daily cases per 100k). After March 2022 the curves rise at similar
+  slopes.
+
+So the difference between the groups was built up mostly in the 2020-21 winter
+and Delta waves, not in Omicron, when the whole country was hit at once.
+
+### c. First five states to experience COVID-19 substantially
+
+I define "substantial" as the 7-day average first reaching 5 new cases per
+100,000 residents per day, which puts states of different sizes on the same
+footing.
+
+```{r}
+#| label: covid-c
+#| fig-width: 10
+#| fig-height: 6
+threshold <- 5
+
+first_dates <- covid |>
+  filter(cases_avg_per_100k >= threshold) |>
+  group_by(state) |>
+  summarise(first_date = min(date), .groups = "drop") |>
+  arrange(first_date)
+
+first_five <- first_dates |> slice_head(n = 5)
+first_five |>
+  kable(col.names = c("State", paste("First day with >=", threshold,
+                                     "cases per 100k")))
+
+early <- covid |>
+  filter(date >= as.Date("2020-03-01"), date <= as.Date("2020-04-15"),
+         cases_avg_per_100k > 0) |>   # log scale cannot show zeros
+  mutate(highlight = if_else(state %in% first_five$state, state, "Other"))
+
+ggplot(early, aes(date, cases_avg_per_100k, group = state)) +
+  geom_line(data = filter(early, highlight == "Other"),
+            colour = "grey80", linewidth = 0.3) +
+  geom_line(data = filter(early, highlight != "Other"),
+            aes(colour = highlight), linewidth = 0.9) +
+  geom_hline(yintercept = threshold, linetype = "dashed", colour = "grey40") +
+  geom_point(data = first_five |>
+               left_join(covid, by = c("state", "first_date" = "date")),
+             aes(first_date, cases_avg_per_100k, colour = state),
+             inherit.aes = FALSE, size = 2.5) +
+  annotate("text", x = as.Date("2020-03-02"), y = threshold * 1.15,
+           label = "5 cases per 100k", hjust = 0, size = 3, colour = "grey30") +
+  scale_y_log10(breaks = c(0.01, 0.1, 1, 10, 100),
+                labels = c("0.01", "0.1", "1", "10", "100")) +
+  scale_x_date(date_breaks = "1 week", date_labels = "%b %d") +
+  scale_colour_brewer(palette = "Set1", name = "First five states",
+                      breaks = first_five$state) +
+  labs(title = "Early spread: the first five states to reach 5 daily cases per 100k",
+       subtitle = "7-day average of new cases per 100,000 residents, March 1 - April 15, 2020 (log scale)",
+       x = NULL, y = "New cases per 100k per day (log scale)",
+       caption = "Points mark the first day each highlighted state crossed the threshold.\nSource: The New York Times, COVID-19 data (rolling averages)") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.minor = element_blank(),
+        plot.title = element_text(face = "bold"))
+```
+
+By this measure the first five states were **New York, New Jersey, Louisiana,
+Massachusetts and Connecticut**, all crossing the threshold between March 21
+and March 28, 2020. The answer is fairly robust: with a 10 per 100k threshold
+the same states plus Michigan lead the list, though at a looser 1 per 100k
+threshold Washington (the first reported U.S. case, January 2020) moves to
+the front.
